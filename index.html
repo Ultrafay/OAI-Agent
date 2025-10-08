@@ -3,14 +3,98 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Vifhe Agent Testing</title>
-  <style>body{margin:0;font-family:system-ui;-webkit-font-smoothing:antialiased}</style>
+  <title>OpenAI ChatKit – Diagnostics</title>
+  <style>
+    :root { --fg:#111; --bg:#fff; --muted:#6b7280; }
+    @media (prefers-color-scheme: dark) { :root { --fg:#e5e7eb; --bg:#0b0f19; --muted:#9ca3af; } }
+    html,body{height:100%} body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto}
+    .wrap{max-width:820px;margin:32px auto;padding:0 16px}
+    .card{border:1px solid rgba(0,0,0,.08);border-radius:12px;padding:16px;margin:12px 0;background:rgba(255,255,255,.04)}
+    pre{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.4}
+    code{font-family:ui-monospace,Menlo,Consolas,monospace}
+  </style>
 </head>
 <body>
-  <h1 style="padding:16px">Vifhe Agent Testing</h1>
+  <div class="wrap">
+    <h1>ChatKit Widget Diagnostics</h1>
+    <div class="card">
+      <p>Status: <strong id="status">Loading…</strong></p>
+      <p class="muted" style="color:var(--muted)">Open DevTools → Console to see network traces and any init errors.</p>
+    </div>
+    <div class="card">
+      <h3>What we’re testing</h3>
+      <ul>
+        <li>Script loads from <code>cdn.openai.com</code></li>
+        <li>Widget initializes with your <code>data-workflow-id</code></li>
+        <li>Network calls don’t return 401/403/CORS</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Captured Events</h3>
+      <pre id="log"></pre>
+    </div>
+  </div>
 
-  <!-- EXACTLY as shown in Deploy → Chat widget -->
+  <!-- 0) Console & on-page log helpers -->
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const log = (...args) => {
+      console.log(...args);
+      logEl.textContent += args.map(a => (typeof a === 'string' ? a : JSON.stringify(a, null, 2))).join(' ') + '\n';
+    };
+    window.addEventListener('error', (e) => log('window.error:', e.message || e));
+    window.addEventListener('unhandledrejection', (e) => log('unhandledrejection:', e.reason || e));
+
+    // 1) Monkey-patch fetch & XHR to surface 401/403/CORS
+    const origFetch = window.fetch;
+    window.fetch = async (...args) => {
+      try {
+        const res = await origFetch(...args);
+        log('fetch:', args[0], '→', res.status);
+        return res;
+      } catch (err) {
+        log('fetch error:', args[0], String(err));
+        throw err;
+      }
+    };
+    const OrigXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function() {
+      const xhr = new OrigXHR();
+      const open = xhr.open; const send = xhr.send;
+      xhr.open = function(method, url) { this._url = url; return open.apply(this, arguments); };
+      xhr.addEventListener('loadend', function() { log('xhr:', this._url, '→', this.status); });
+      xhr.send = function() { return send.apply(this, arguments); };
+      return xhr;
+    };
+
+    // 2) Detect the widget bubble DOM (ChatKit injects a shadow-root element)
+    const bubbleCheck = () => {
+      const el = document.querySelector('[data-openai-chat-widget], openai-chat-widget, [id*="openai"][class*="chat"]');
+      if (el) { statusEl.textContent = 'Widget element injected ✅'; log('widget element found:', el.tagName || el); }
+    };
+    const mo = new MutationObserver(bubbleCheck);
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(bubbleCheck, 1500);
+  </script>
+
+  <!-- 3) LOAD THE WIDGET (use exactly one of these; your case is workflow) -->
+  <script>
+    statusEl.textContent = 'Loading ChatKit script…';
+  </script>
+
+  <!-- You said your ID is a WORKFLOW id: keep data-workflow-id -->
   <script src="https://cdn.openai.com/chat-widget/beta.js"
-          data-workflow-id="wf_68e60c6b5ef081909ff4fdf6065a1822095131eb008a1c18"></script>
+          data-workflow-id="wf_68e60c6b5ef081909ff4fdf6065a1822095131eb008a1c18"
+          onload="statusEl.textContent='Script loaded ✅, waiting for init…'; log('script onload fired')"
+          onerror="statusEl.textContent='Script failed to load ❌'; log('script failed to load')">
+  </script>
+
+  <!-- If your Deploy tab shows AGENT instead, replace the tag above with:
+  <script src="https://cdn.openai.com/chat-widget/beta.js"
+          data-agent-id="ag_xxxxxxxxxxxxxxxxx"
+          onload="statusEl.textContent='Script loaded ✅, waiting for init…'; log('script onload fired')"
+          onerror="statusEl.textContent='Script failed to load ❌'; log('script failed to load')"></script>
+  -->
 </body>
 </html>
